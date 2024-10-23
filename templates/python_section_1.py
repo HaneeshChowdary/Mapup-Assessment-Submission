@@ -1,7 +1,8 @@
 import re
 from typing import Any, Dict, List
-
-# import pandas as pd
+import polyline
+import pandas as pd
+from geopy.distance import geodesic
 
 
 def reverse_by_n_elements(lst: List[int], n: int) -> List[int]:
@@ -133,6 +134,13 @@ def find_all_dates(text: str) -> List[str]:
     
     return result
 
+# bfbhbjfbhjbhhb
+def haversine_distance(coord1, coord2):
+    """
+    Calculate the Haversine distance between two coordinates in meters.
+    """
+    return geodesic(coord1, coord2).meters
+
 def polyline_to_dataframe(polyline_str: str) -> pd.DataFrame:
     """
     Converts a polyline string into a DataFrame with latitude, longitude, and distance between consecutive points.
@@ -143,34 +151,94 @@ def polyline_to_dataframe(polyline_str: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: A DataFrame containing latitude, longitude, and distance in meters.
     """
-    return pd.Dataframe()
+    # Decode polyline into a list of (latitude, longitude) coordinates
+    coordinates = polyline.decode(polyline_str)
+    
+    # Create a DataFrame from the coordinates
+    df = pd.DataFrame(coordinates, columns=['latitude', 'longitude'])
+    
+    # Calculate distances between consecutive points
+    distances = [0]  # First point has no previous point, so distance is 0
+    
+    for i in range(1, len(coordinates)):
+        coord1 = coordinates[i - 1]
+        coord2 = coordinates[i]
+        distance = haversine_distance(coord1, coord2)
+        distances.append(distance)
+    
+    # Add the distances to the DataFrame
+    df['distance'] = distances
+    
+    return df
 
 
 def rotate_and_multiply_matrix(matrix: List[List[int]]) -> List[List[int]]:
-    """
-    Rotate the given matrix by 90 degrees clockwise, then multiply each element 
-    by the sum of its original row and column index before rotation.
+    n = len(matrix)
     
-    Args:
-    - matrix (List[List[int]]): 2D list representing the matrix to be transformed.
+    # Step 1: Rotate the matrix by 90 degrees clockwise
+    # First transpose, then reverse rows
+    rotated_matrix = [[matrix[n - j - 1][i] for j in range(n)] for i in range(n)]
     
-    Returns:
-    - List[List[int]]: A new 2D list representing the transformed matrix.
-    """
-    # Your code here
-    return []
+    # Step 2: Create the final matrix with row and column sums excluding the element itself
+    final_matrix = [[0] * n for _ in range(n)]
+    
+    # Precompute row sums and column sums for the rotated matrix
+    row_sums = [sum(rotated_matrix[i]) for i in range(n)]
+    col_sums = [sum(rotated_matrix[i][j] for i in range(n)) for j in range(n)]
+    
+    # Replace each element with the sum of its row and column excluding itself
+    for i in range(n):
+        for j in range(n):
+            final_matrix[i][j] = row_sums[i] + col_sums[j] - rotated_matrix[i][j]
+    
+    return final_matrix
+
+
 
 
 def time_check(df) -> pd.Series:
     """
-    Use shared dataset-2 to verify the completeness of the data by checking whether the timestamps for each unique (`id`, `id_2`) pair cover a full 24-hour and 7 days period
-
+    Verifies the completeness of the time data by checking whether the timestamps for each unique (id, id_2) pair 
+    cover a full 24-hour period and span all 7 days of the week.
+    
     Args:
-        df (pandas.DataFrame)
-
+        df (pandas.DataFrame): The input dataframe containing 'id', 'id_2', 'startDay', 'startTime', 'endDay', 'endTime' columns.
+    
     Returns:
-        pd.Series: return a boolean series
+        pd.Series: A boolean series with a multi-index (id, id_2), indicating True if the timestamps are incomplete.
     """
-    # Write your logic here
+    
+    # Helper function to generate all minute intervals for a given day
+    def generate_day_intervals():
+        # Generate all minutes in a day
+        return pd.date_range('00:00', '23:59', freq='T').time
+    
+    # Expected full set of times for all 7 days of the week
+    full_coverage = {day: set(generate_day_intervals()) for day in range(7)}
 
-    return pd.Series()
+    # Group the DataFrame by id and id_2
+    def check_group(group):
+        # Dictionary to track time coverage per day of the week
+        coverage = {day: set() for day in range(7)}
+        
+        # Iterate over each row in the group and add the intervals
+        for _, row in group.iterrows():
+            start_day, start_time = row['startDay'], row['startTime']
+            end_day, end_time = row['endDay'], row['endTime']
+            
+            if start_day == end_day:  # Interval within the same day
+                coverage[start_day].update(pd.date_range(start_time, end_time, freq='T').time)
+            else:
+                # Split the interval across multiple days
+                coverage[start_day].update(pd.date_range(start_time, '23:59', freq='T').time)
+                coverage[end_day].update(pd.date_range('00:00', end_time, freq='T').time)
+        
+        # Check if every day has full coverage
+        for day in range(7):
+            if coverage[day] != full_coverage[day]:
+                return True  # Missing time intervals
+        
+        return False  # All days have full coverage
+    
+    # Apply the check_group function to each group and return a boolean Series
+    return df.groupby(['id', 'id_2']).apply(check_group)
